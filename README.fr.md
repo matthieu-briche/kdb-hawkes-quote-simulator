@@ -1,6 +1,6 @@
 # Générateur de Données Synthétiques de Carnet d'Ordres pour kdb+/q
 
-Ce script est un générateur de données synthétiques de carnet d'ordres pour $\text{kdb+}/q$. Il simule des cotations $\text{bid}/\text{ask}$ dont les instants d'arrivée suivent un processus de Hawkes (processus auto-excitant), vérifie statistiquement la simulation, écrit une base historique ($\text{HDB}$) partitionnée par date, puis la relit et reconstruit une grille à la milliseconde.
+Ce script - hawkes_quote.q - est un générateur de données synthétiques de carnet d'ordres pour $\text{kdb+}/q$. Il simule des cotations $\text{bid}/\text{ask}$ dont les instants d'arrivée suivent un processus de Hawkes (processus auto-excitant), vérifie statistiquement la simulation, écrit une base historique ($\text{HDB}$) partitionnée par date, puis la relit et reconstruit une grille à la milliseconde.
 
 ---
 
