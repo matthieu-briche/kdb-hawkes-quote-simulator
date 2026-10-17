@@ -184,6 +184,48 @@ bash tests/tick_smoke.sh        # tp + rdb + feed on spare ports, checks the RDB
 
 ---
 
+## Testing with QCumber and qLint
+
+The project is structured so that it can be tested with **QCumber** and checked with **qLint**.
+
+### Why
+
+Originally, every file mixed functions with side effects: `hawkes_quotes.q` rewrote `hdbq` and `mle.q` ran `\l hdbq`, so loading either one in a test triggered the whole pipeline. Shared functions (`hawkesBranch`, `par`, `ksStat`…) were also duplicated across three files. Functions and side effects are now separated.
+
+### Layout
+
+| Folder | Contents |
+|---|---|
+| `src/` | `hawkes.q` (all functions, no side effects) and `sym.q` (schema) |
+| `scripts/` | `gen_hdb.q`, `fit.q`, `feed.q`: load `src/hawkes.q`, then run the side effects |
+| `tests/` | `simulation.quke`, `estimation.quke` |
+
+### Testable building blocks
+
+- **`fitTimes[t;T]`**: the MLE, extracted from `fit`. It takes a vector of times instead of reading the HDB, so it can be tested on simulated data.
+- **`mkDay[]`**: generates a full day for all symbols, used by `gen_hdb.q` and `feed.q`.
+- **`verbose`**: silences the Nelder–Mead progress output during tests.
+- **`ks5` / `ks1`**: KS critical values at 5 % and 1 %.
+
+The algorithms themselves (simulation, likelihood, Nelder–Mead, Hessian) are unchanged.
+
+### Test suites
+
+- **Simulation** (`simulation.quke`): error when the process is non-stationary, sorted times in $[0,T)$, mean event count, N(0,1) normals, `mkQuote` schema and consistency.
+- **Estimation** (`estimation.quke`): KS statistic, `acf`, `logL` reducing to the Poisson likelihood when $\alpha = 0$, Nelder–Mead (parabola, Rosenbrock, `maxit`), end-to-end MLE recovering the true parameters within 3 standard errors.
+
+Tests fix the seed (`\S 42`) and use loose thresholds to avoid flaky failures.
+
+### Running
+
+```bash
+q qcumber.q_ -src src/hawkes.q -test tests/
+q scripts/gen_hdb.q
+q scripts/fit.q
+```
+
+---
+
 ## Limitations
 
 - **Prices carry no information from the order flow**: the mid is a random walk on the event clock, and spreads and sizes are i.i.d. The model is about *when* quotes arrive, not how prices form.
@@ -202,7 +244,7 @@ bash tests/tick_smoke.sh        # tp + rdb + feed on spare ports, checks the RDB
 
 ## Tech
 
-`kdb+/q` · `kdb+tick` · `.Q.dpft` partitioned HDB · `aj` as-of join · point processes · maximum likelihood · Nelder–Mead
+`kdb+/q` · `kdb+tick` · `.Q.dpft` partitioned HDB · `aj` as-of join · point processes · maximum likelihood · Nelder–Mead · QCumber · qLint
 
 ---
 
