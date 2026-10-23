@@ -28,36 +28,38 @@ Stationary mean rate: $\mu / (1-n)$, i.e. up to ~12 quotes/s on average for TSLA
 ## Architecture
 
 ```
-                     scripts/gen_hdb.q
+                     hawkes_quotes.q
    ┌──────────────┐    ┌──────────────────────────────┐      ┌──────────┐
-   │  Simulation  │───►│ statistical checks            │─────►│  HDB     │──► scripts/fit.q
+   │  Simulation  │───►│ statistical checks            │─────►│  HDB     │──► mle.q
    │  (branching) │    │ (compensator, KS, ACF, Fano)  │      │  hdbq/   │    parameter
    └──────────────┘    └──────────────────────────────┘      │  date/   │    recovery
                                                               │  quote   │
                                                               └────┬─────┘
                                                                    └──► aj : bid/ask on a 1 ms grid
-   scripts/feed.q             tick/tp.q (port 5010)         tick/rdb.q
+   feed.q                     tick/tp.q (port 5010)         tick/rdb.q
    ┌──────────────┐  .u.upd   ┌──────────────┐  publish   ┌──────────┐
    │ HDB day,     │──────────►│  tickerplant │───────────►│   RDB    │
    │ replay (x60) │           │ schema sym.q │            │          │
    └──────────────┘           └──────────────┘            └──────────┘
 
-   src/hawkes.q: every function (parameters, simulator, residual tests, likelihood,
-                 Nelder-Mead, Hessian), no side effects; loaded by all scripts and tests
+   lib/hawkes.q: parameters, simulator, residual tests, quote generation
+   lib/mle.q   : likelihood, Nelder-Mead, Hessian
+                 no side effects; loaded by the scripts and the tests
 ```
 
-Functions and side effects are kept apart: `src/` only defines, `scripts/` only runs. Loading `src/hawkes.q` never touches the disk, which is what makes it testable (see [Testing with QCumber and qLint](#testing-with-qcumber-and-qlint)).
+Functions and side effects are kept apart: `lib/` only defines, the top-level scripts (`hawkes_quotes.q`, `mle.q`, `feed.q`) run. Loading `lib/hawkes.q` or `lib/mle.q` never touches the disk, which is what makes it testable (see [Testing with QCumber and qLint](#testing-with-qcumber-and-qlint)).
 
 | File | Role |
 |---|---|
-| [`src/hawkes.q`](src/hawkes.q) | single source for the true parameters, the simulator, the residual tests, the log-likelihood, the Nelder–Mead simplex and the numerical Hessian, as pure functions |
-| [`src/sym.q`](src/sym.q) | kdb+tick schema for the `quote` table |
-| [`scripts/gen_hdb.q`](scripts/gen_hdb.q) | simulation, statistical checks, writes a 10-day partitioned HDB, 1 ms as-of grid |
-| [`scripts/fit.q`](scripts/fit.q) | maximum-likelihood estimation of $(\mu,\alpha,\beta)$ on every day of the HDB, standard errors, coverage, goodness of fit |
-| [`scripts/feed.q`](scripts/feed.q) | replays one stored HDB day into a tickerplant in accelerated time |
+| [`lib/hawkes.q`](lib/hawkes.q) | single source for the true parameters, the simulator, the residual tests and the quote generator, as pure functions |
+| [`lib/mle.q`](lib/mle.q) | log-likelihood, Nelder–Mead simplex and numerical Hessian, as pure functions |
+| [`sym.q`](sym.q) | kdb+tick schema for the `quote` table |
+| [`hawkes_quotes.q`](hawkes_quotes.q) | simulation, statistical checks, writes a 10-day partitioned HDB, 1 ms as-of grid |
+| [`mle.q`](mle.q) | maximum-likelihood estimation of $(\mu,\alpha,\beta)$ on every day of the HDB, standard errors, coverage, goodness of fit |
+| [`feed.q`](feed.q) | replays one stored HDB day into a tickerplant in accelerated time |
 | [`fh.q`](fh.q), [`lib/mods.q`](lib/mods.q) | optional UDP path (KDB-X): feed handler with gap detection, and the loader that falls back to pure q when a KDB-X module is missing |
 | [`tick/tp.q`](tick/tp.q), [`tick/rdb.q`](tick/rdb.q) | minimal tickerplant (journal, subscriptions by table and symbol) and real-time database, same protocol as kdb+tick |
-| [`tests/`](tests) | QCumber suites (`simulation.quke`, `estimation.quke`), end-to-end test of the real-time path (`tick_smoke.sh`) |
+| [`tests/`](tests) | plain-q test runner (`run.q`), QCumber suites (`hawkes.quke`, `mle.quke`), end-to-end test of the real-time path (`tick_smoke.sh`) |
 | [`docs/figures.py`](docs/figures.py) | Python port of the simulator that draws the two figures below |
 
 ---
@@ -78,7 +80,7 @@ Prices follow a geometric random walk on the event clock, in integer cents, with
 
 ## 2. Statistical validation
 
-A simulator is only useful if it is checked. `scripts/gen_hdb.q` runs four tests per symbol:
+A simulator is only useful if it is checked. `hawkes_quotes.q` runs four tests per symbol:
 
 - **Time-rescaling theorem**: the compensator increments $\Lambda(t_i) - \Lambda(t_{i-1})$ must be i.i.d. Exp(1). Checked with the mean, the variance and a **Kolmogorov–Smirnov test**.
 - **Independence**: lag-1 autocorrelation of these increments ≈ 0.
@@ -93,7 +95,7 @@ The script prints each statistic next to its 5 % critical value, plus a markdown
 
 ---
 
-## 3. Parameter recovery by maximum likelihood (`scripts/fit.q`)
+## 3. Parameter recovery by maximum likelihood (`mle.q`)
 
 The final check: can the true parameters be recovered **from the stored 1 ms data alone**?
 
@@ -111,7 +113,7 @@ $$
 
 ### Results
 
-From the output of `q scripts/fit.q` on the first day of the HDB (2024.01.02, seed 42), estimates ± standard error:
+From the output of `q mle.q` on the first day of the HDB (2024.01.02, seed 42), estimates ± standard error:
 
 | sym | N events | $\mu$ (true → est.) | $\alpha$ (true → est.) | $\beta$ (true → est.) | $n$ (true → est.) | LR vs Poisson |
 |---|---|---|---|---|---|---|
@@ -121,10 +123,10 @@ From the output of `q scripts/fit.q` on the first day of the HDB (2024.01.02, se
 | AMZN | 47,911 | 0.6 → 0.603 ± 0.005 | 35 → 35.35 ± 0.33 | 50 → 50.11 ± 0.39 | 0.70 → 0.705 | 174,603 |
 | TSLA | 275,796 | 1.2 → 1.195 ± 0.008 | 45 → 44.84 ± 0.20 | 50 → 49.90 ± 0.20 | 0.90 → 0.899 | 1,142,515 |
 
-Over the 50 fits, Nelder–Mead converges in 50 to 70 iterations, in 1 to 7 seconds per fit except TSLA (13 to 16 s, the largest sample); the full `q scripts/fit.q` run takes about 4½ minutes on a laptop.
+Over the 50 fits, Nelder–Mead converges in 50 to 70 iterations, in 1 to 7 seconds per fit except TSLA (13 to 16 s, the largest sample); the full `q mle.q` run takes about 4½ minutes on a laptop.
 
 - **Parameters are recovered on this day**: every standardised error (estimate − truth) / SE stays below 1.2 in absolute value. One day per symbol is a single draw, so it cannot by itself show that the estimator is unbiased or that the standard errors are right.
-- **Hence the multi-day check.** `scripts/fit.q` fits all 50 (day, symbol) pairs and reports, per symbol and pooled, the mean and standard deviation of the standardised errors (expected ≈ 0 and ≈ 1) and the coverage of the 95 % intervals estimate ± 1.96 SE (expected ≈ 95 %). This is where a bias from the 1 ms rounding, or an underestimated SE, would show up.
+- **Hence the multi-day check.** `mle.q` fits all 50 (day, symbol) pairs and reports, per symbol and pooled, the mean and standard deviation of the standardised errors (expected ≈ 0 and ≈ 1) and the coverage of the 95 % intervals estimate ± 1.96 SE (expected ≈ 95 %). This is where a bias from the 1 ms rounding, or an underestimated SE, would show up.
 
   Standardised errors $z$ = (estimate − truth) / SE over the 10 days, mean / sd, and coverage of the 95 % intervals:
 
@@ -140,7 +142,7 @@ Over the 50 fits, Nelder–Mead converges in 50 to 70 iterations, in 1 to 7 seco
   Pooled coverage is close to 95 % and the per-symbol spreads lie between 0.7 and 1.3. The mean errors are all slightly positive: with 50 fits a pooled mean has a standard error of about 0.14, so only $\beta$ (0.30, about 2 SE) stands out, and the three estimates are correlated within a fit, so these are not three independent signals. TSLA, with the most 1 ms ties (11 % of its events), has the widest spread (sd 1.2–1.3) and the lowest coverage, which is consistent with a small effect of the rounding on the estimates, though not proof of it. Ten days per symbol remain few: one missed interval moves a symbol's coverage by 10 points.
 - **Self-excitation is overwhelming**: the likelihood ratio against a homogeneous Poisson process is in the hundreds of thousands. The usual $\chi^2_2$ reference (5.99 at 5 %) is only indicative here: under the Poisson null $\alpha = 0$ sits on the boundary of the parameter space and $\beta$ is not identified, so Wilks' theorem does not strictly apply (Davies' problem). At these magnitudes the conclusion does not depend on it.
 - **On the stored 1 ms times, the residual KS test rejects for all five symbols, and that is informative.** Many events share a timestamp with the previous one (about 30,000 ties for TSLA, 11 % of its events; 2.5 % for GOOG). Each tie gives a compensator increment of exactly 0, so the empirical CDF of the residuals jumps at 0 by the share of ties, while Exp(1) has no mass there: the KS statistic is at least that share (0.025 for GOOG to 0.108 for TSLA on the first day), far above the critical value (0.003 to 0.008 here). It fails in all 50 fits.
-- **Spreading each event uniformly within its millisecond removes the artefact.** `scripts/fit.q` reports this second statistic as `KSjit`, computed with the same estimated parameters: it passes in all 50 fits. With a 20 ms memory, 1 ms is too coarse for residual tests on the raw stamps, but not once the rounding is undone.
+- **Spreading each event uniformly within its millisecond removes the artefact.** `mle.q` reports this second statistic as `KSjit`, computed with the same estimated parameters: it passes in all 50 fits. With a 20 ms memory, 1 ms is too coarse for residual tests on the raw stamps, but not once the rounding is undone.
 
 <p align="center"><img src="assets/residuals_cdf.png" alt="Empirical CDF of the compensator residuals near 0 for continuous, rounded and de-quantised times" width="600"></p>
 
@@ -155,10 +157,10 @@ Requires [kdb+](https://kx.com/kdb-personal-edition-download/) (free personal / 
 
 ```bash
 # 1. simulate, validate, write the HDB (hdbq/) and build the 1 ms grid
-q scripts/gen_hdb.q
+q hawkes_quotes.q
 
 # 2. recover the parameters on every day of the HDB
-q scripts/fit.q
+q mle.q
 
 # optional: redraw the README figures (numpy, matplotlib)
 python docs/figures.py
@@ -169,11 +171,11 @@ Real-time replay, self-contained (three terminals, from the repository root):
 ```bash
 q tick/tp.q -p 5010             # tickerplant, journal in tplog/
 q tick/rdb.q :5010 -p 5011      # real-time database: stats[] , last1[`TSLA]
-q scripts/feed.q 60             # replay the first HDB day at x60 (6h30 in 6 min 30 s)
-q scripts/feed.q 60 2024.01.03  # or a given day
+q feed.q 60                     # replay the first HDB day at x60 (6h30 in 6 min 30 s)
+q feed.q 60 2024.01.03          # or a given day
 ```
 
-`tick/tp.q` and `tick/rdb.q` speak the kdb+tick protocol (`.u.upd`, `.u.sub`, journal replay with `-11!`), so the official [kdb+tick](https://github.com/KxSystems/kdb-tick) scripts can replace them (`q tick.q sym . -p 5010` with `src/sym.q` copied into `tick/`). Neither handles end of day: the replayed day stays in memory.
+`tick/tp.q` and `tick/rdb.q` speak the kdb+tick protocol (`.u.upd`, `.u.sub`, journal replay with `-11!`), so the official [kdb+tick](https://github.com/KxSystems/kdb-tick) scripts can replace them (`q tick.q sym . -p 5010` with `sym.q` copied into `tick/`). Neither handles end of day: the replayed day stays in memory.
 
 ### Optional: an exchange-style UDP feed (KDB-X)
 
@@ -198,7 +200,8 @@ q feed.q 60 2024.01.02 5010 -udp 239.1.1.1:30001
 ### Tests
 
 ```bash
-q qcumber.q_ -src src/hawkes.q -test tests/   # QCumber suites, no HDB needed
+q tests/run.q                                 # plain-q test runner, no HDB needed
+q qcumber.q_ -src tests/load.q -test tests/   # QCumber suites (hawkes.quke, mle.quke)
 bash tests/tick_smoke.sh                      # tp + rdb + feed on spare ports, checks the RDB matches the HDB day
 MODE=udp bash tests/tick_smoke.sh             # same through feed.q -udp and fh.q (skipped without KDB-X and dot.udp)
 ```
@@ -213,21 +216,13 @@ The project is structured so that it can be tested with **QCumber** and checked 
 
 ### Why this layout
 
-Originally, every file mixed functions with side effects: `hawkes_quotes.q` rewrote `hdbq` and `mle.q` ran `\l hdbq`, so loading either one in a test triggered the whole pipeline. Shared functions (`hawkesBranch`, `par`, `ksStat`…) were also duplicated across three files. Everything now lives once in `src/hawkes.q`, with no side effects, and `scripts/` (`gen_hdb.q`, `fit.q`, `feed.q`) loads it and does the work. QCumber loads `src/hawkes.q` directly, and qLint runs on that single file.
-
-### Testable building blocks
-
-- **`fitTimes[t;T]`**: the MLE, extracted from `fit`. It takes a vector of times instead of reading the HDB, so it can be tested on simulated data.
-- **`mkDay[]`**: generates a full day for all symbols, used by `gen_hdb.q` and `feed.q`.
-- **`verbose`**: silences the Nelder–Mead progress output during tests.
-- **`ks5` / `ks1`**: KS critical values at 5 % and 1 %.
-
-The algorithms themselves (simulation, likelihood, Nelder–Mead, Hessian) are unchanged.
+Originally, every file mixed functions with side effects: `hawkes_quotes.q` rewrote `hdbq` and `mle.q` ran `\l hdbq`, so loading either one in a test triggered the whole pipeline. Shared functions (`hawkesBranch`, `par`, `ksStat`…) were also duplicated across three files. They now live once in `lib/hawkes.q` and `lib/mle.q`, with no side effects, and the top-level scripts load them and do the work. The tests load the two libraries directly (`tests/load.q` for QCumber, whose `-src` takes a single file), and qLint runs on them.
 
 ### Test suites
 
-- **Simulation** (`simulation.quke`): error when the process is non-stationary, sorted times in $[0,T)$, mean event count, N(0,1) normals, `mkQuote` schema and consistency.
-- **Estimation** (`estimation.quke`): KS statistic, `acf`, `logL` reducing to the Poisson likelihood when $\alpha = 0$, Nelder–Mead (parabola, Rosenbrock, `maxit`), end-to-end MLE recovering the true parameters within 3 standard errors.
+- **`tests/run.q`**: plain-q runner, no dependency, exit code 1 on failure (usable in CI). Exact tests against brute-force O(n²) references or closed forms, statistical tests at about 5 standard deviations, an end-to-end simulate-and-fit, and the 1 ms rounding effect on the KS test.
+- **Simulation** (`hawkes.quke`): error when the process is non-stationary, sorted times in $[0,T)$, mean event count, Exp(1) compensator residuals, compensator, KS statistic and autocorrelation, `mkQuote` schema (matching `sym.q`) and consistency.
+- **Estimation** (`mle.quke`): `logL` reducing to the Poisson likelihood when $\alpha = 0$, parameter mapping, Nelder–Mead (Rosenbrock, 3-d quadratic, `maxit`), Hessian of a quadratic form, end-to-end MLE recovering the true parameters.
 
 Tests fix the seed (`\S 42`) and use loose thresholds to avoid flaky failures. The command to run them is under [Tests](#tests).
 
