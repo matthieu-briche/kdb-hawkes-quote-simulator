@@ -61,6 +61,7 @@ Functions and side effects are kept apart: `lib/` only defines, the top-level sc
 | [`tick/tp.q`](tick/tp.q), [`tick/rdb.q`](tick/rdb.q) | minimal tickerplant (journal, subscriptions by table and symbol) and real-time database, same protocol as kdb+tick |
 | [`tests/`](tests) | plain-q test runner (`run.q`), QCumber suites (`hawkes.quke`, `mle.quke`), end-to-end test of the real-time path (`tick_smoke.sh`) |
 | [`docs/figures.py`](docs/figures.py) | Python port of the simulator that draws the two figures below |
+| [`docs/figures.q`](docs/figures.q) | same figure data computed in q, served to KX Dashboards (and exported as CSV) |
 
 ---
 
@@ -164,7 +165,12 @@ q mle.q
 
 # optional: redraw the README figures (numpy, matplotlib)
 python docs/figures.py
+
+# optional: same figure data in q, served to KX Dashboards on port 5001
+q docs/figures.q -p 5001
 ```
+
+In KX Dashboards, add a kdb+ connection to `localhost:5001` and use the table names as q queries: `fanoTheo` and `fanoSim` (x = `w`, log-log axes) for the Fano figure, `residCont`, `residMs`, `residJit` and `exp1` (x = `r`) for the residual CDF. The tables are also written as CSV to `docs/data/`. During a replay, a second chart pointed at the RDB (`localhost:5011`) with ``select time,bid,ask from quote where sym=`TSLA`` shows the quote bursts live.
 
 Real-time replay, self-contained (three terminals, from the repository root):
 
