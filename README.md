@@ -55,6 +55,7 @@ Functions and side effects are kept apart: `src/` only defines, `scripts/` only 
 | [`scripts/gen_hdb.q`](scripts/gen_hdb.q) | simulation, statistical checks, writes a 10-day partitioned HDB, 1 ms as-of grid |
 | [`scripts/fit.q`](scripts/fit.q) | maximum-likelihood estimation of $(\mu,\alpha,\beta)$ on every day of the HDB, standard errors, coverage, goodness of fit |
 | [`scripts/feed.q`](scripts/feed.q) | replays one stored HDB day into a tickerplant in accelerated time |
+| [`fh.q`](fh.q), [`lib/mods.q`](lib/mods.q) | optional UDP path (KDB-X): feed handler with gap detection, and the loader that falls back to pure q when a KDB-X module is missing |
 | [`tick/tp.q`](tick/tp.q), [`tick/rdb.q`](tick/rdb.q) | minimal tickerplant (journal, subscriptions by table and symbol) and real-time database, same protocol as kdb+tick |
 | [`tests/`](tests) | QCumber suites (`simulation.quke`, `estimation.quke`), end-to-end test of the real-time path (`tick_smoke.sh`) |
 | [`docs/figures.py`](docs/figures.py) | Python port of the simulator that draws the two figures below |
@@ -174,11 +175,32 @@ q scripts/feed.q 60 2024.01.03  # or a given day
 
 `tick/tp.q` and `tick/rdb.q` speak the kdb+tick protocol (`.u.upd`, `.u.sub`, journal replay with `-11!`), so the official [kdb+tick](https://github.com/KxSystems/kdb-tick) scripts can replace them (`q tick.q sym . -p 5010` with `src/sym.q` copied into `tick/`). Neither handles end of day: the replayed day stays in memory.
 
+### Optional: an exchange-style UDP feed (KDB-X)
+
+Exchanges do not send market data over a TCP connection to your tickerplant: they broadcast **UDP multicast** datagrams carrying sequence numbers (ITCH over MoldUDP, for instance), and a **feed handler** turns them into tickerplant updates. With KDB-X and the `dot.udp` module from [adotsch/kdb-x](https://github.com/adotsch/kdb-x) installed in its `mod` directory, the replay can take that path:
+
+```
+ feed.q -udp ──UDP datagrams (seq;columns)──► fh.q ──.u.upd (TCP)──► tick/tp.q ──► tick/rdb.q
+```
+
+```bash
+q tick/tp.q -p 5010
+q tick/rdb.q :5010 -p 5011
+q fh.q 239.1.1.1:30001 5010              # feed handler: joins the group, forwards to the tickerplant
+q feed.q 60 2024.01.02 5010 -udp 239.1.1.1:30001
+```
+
+- **Datagrams**: each one holds at most 200 rows, serialised with `-8!` together with its sequence number (about 10 KB, under the 64 KB UDP limit). At most 20 leave per 100 ms tick, so a high replay speed makes the feed lag behind the simulated clock instead of overflowing the receiver's socket buffer.
+- **Gap detection**: `fh.q` checks the sequence numbers and counts gaps, lost and late datagrams (`.fh.stats[]`). UDP guarantees neither delivery nor order; a production handler would re-request the missing datagrams or resynchronise from a snapshot.
+- **Multicast or unicast**: an address in 224.0.0.0–239.255.255.255 is joined as a multicast group; any other address is plain unicast, e.g. `127.0.0.1:30001` on a machine without a multicast route.
+- **Fallback**: on plain kdb+ 4.x, or without the module, `lib/mods.q` reports it, `feed.q` ignores `-udp` and publishes over TCP as before, and `fh.q` exits with code 2. Nothing else in the project depends on KDB-X.
+
 ### Tests
 
 ```bash
 q qcumber.q_ -src src/hawkes.q -test tests/   # QCumber suites, no HDB needed
 bash tests/tick_smoke.sh                      # tp + rdb + feed on spare ports, checks the RDB matches the HDB day
+MODE=udp bash tests/tick_smoke.sh             # same through feed.q -udp and fh.q (skipped without KDB-X and dot.udp)
 ```
 
 The content of the suites is described in the next section.
