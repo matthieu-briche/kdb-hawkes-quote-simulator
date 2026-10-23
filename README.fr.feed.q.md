@@ -22,3 +22,11 @@ Le cœur du script repose sur une horloge déclenchée toutes les 100 millisecon
 4. **Clôture** : une fois tous les ticks de la journée envoyés (`pos >= count day`), le script désactive la minuterie (`system"t 0"`).
 
 Ce type de script est très courant dans les salles de marché pour alimenter des architectures kdb+ de test ou de recette avec un comportement de marché réaliste et contrôlable.
+
+## 4. Option : flux UDP façon bourse (KDB-X)
+
+Avec `-udp adresse:port` (par exemple `q feed.q 60 2024.01.02 5010 -udp 239.1.1.1:30001`), le script ne parle plus au tickerplant : il diffuse les quotes en datagrammes UDP, comme le flux multicast d'une bourse, et `fh.q` (le *feed handler*) les reçoit et appelle `.u.upd` sur le tickerplant.
+
+- **Datagrammes séquencés** : chaque lot est découpé en datagrammes d'au plus 200 lignes, sérialisés avec `-8!` sous la forme `(seq;colonnes)`. Le numéro de séquence permet à `fh.q` de détecter les pertes et les datagrammes arrivés en retard (`.fh.stats[]`).
+- **Débit limité** : au plus 20 datagrammes partent par tick de 100 ms, pour ne pas saturer le buffer de réception du socket ; à très grande vitesse, le rejeu prend du retard sur l'horloge simulée au lieu de perdre des messages.
+- **Repli en q pur** : l'UDP nécessite KDB-X et le module `dot.udp` ([adotsch/kdb-x](https://github.com/adotsch/kdb-x)). Sans eux, `lib/mods.q` le signale et le script publie en TCP comme avant.
